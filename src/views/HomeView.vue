@@ -5,6 +5,7 @@ import { ScrollTrigger } from 'gsap/ScrollTrigger'
 import Lenis from 'lenis'
 import SceneVideo from '../components/SceneVideo.vue'
 import LoadingOverlay from '../components/LoadingOverlay.vue'
+import BackgroundVideo from '../components/BackgroundVideo.vue'
 import CleenLogo from '../assets/cleen.svg'
 import AudioControl from '../assets/audio-control.svg'
 import MenuIcon from '../assets/menu-icon.svg'
@@ -27,8 +28,10 @@ const activeSceneIndex = ref(0)
 const scrollProgress = ref(0)
 const triggers = []
 const isTransitioning = ref(false)
+const isInCooldown = ref(false)
 const isLoading = ref(true)
 const loadingProgress = ref(0)
+const pendingSceneChange = ref(null)
 const prefersReducedMotion =
   typeof window !== 'undefined'
     ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -44,7 +47,27 @@ const setSectionRef = (el) => {
 }
 
 const activateScene = (index) => {
-  activeSceneIndex.value = index
+  // Si estamos en transición o cooldown, guardar el cambio pendiente
+  if (isTransitioning.value || isInCooldown.value) {
+    pendingSceneChange.value = index
+    return
+  }
+  
+  // Solo activar si es diferente a la escena actual
+  if (index !== activeSceneIndex.value) {
+    activeSceneIndex.value = index
+  }
+}
+
+const processPendingSceneChange = () => {
+  if (pendingSceneChange.value !== null && !isTransitioning.value && !isInCooldown.value) {
+    const targetIndex = pendingSceneChange.value
+    pendingSceneChange.value = null
+    // Solo activar si es diferente a la escena actual
+    if (targetIndex !== activeSceneIndex.value) {
+      activeSceneIndex.value = targetIndex
+    }
+  }
 }
 
 // Convert scene time (seconds) to frame index
@@ -162,21 +185,7 @@ const preloadAll = async () => {
 }
 
 const initScrollTriggers = () => {
-  // Global scroll progress trigger - maps scroll to frame progress
-  if (experienceRef.value) {
-    const globalTrigger = ScrollTrigger.create({
-      trigger: experienceRef.value,
-      start: 'top top',
-      end: 'bottom bottom',
-      scrub: 0.5, // Small scrub for smooth but direct response
-      onUpdate: (self) => {
-        scrollProgress.value = self.progress
-      }
-    })
-    triggers.push(globalTrigger)
-  }
-
-  // Section triggers for scene activation
+  // Section triggers for scene activation based on scroll
   sections.value.forEach((section, index) => {
     const trigger = ScrollTrigger.create({
       trigger: section,
@@ -184,11 +193,19 @@ const initScrollTriggers = () => {
       end: 'bottom center',
       scrub: false,
       onEnter: () => {
-        if (isTransitioning.value) return
+        // Bloquear si estamos en transición o cooldown
+        if (isTransitioning.value || isInCooldown.value) {
+          pendingSceneChange.value = index
+          return
+        }
         activateScene(index)
       },
       onEnterBack: () => {
-        if (isTransitioning.value) return
+        // Bloquear si estamos en transición o cooldown
+        if (isTransitioning.value || isInCooldown.value) {
+          pendingSceneChange.value = index
+          return
+        }
         activateScene(index)
       }
     })
@@ -209,7 +226,15 @@ const initLenis = () => {
     duration: 1.2
   })
 
-  lenis.on('scroll', ScrollTrigger.update)
+  lenis.on('scroll', (e) => {
+    // Bloquear scroll durante transición o cooldown
+    if (isTransitioning.value || isInCooldown.value) {
+      lenis.stop()
+      // Prevenir que ScrollTrigger procese eventos durante bloqueo
+      return false
+    }
+    ScrollTrigger.update()
+  })
 
   const raf = (time) => {
     lenis.raf(time)
@@ -242,7 +267,19 @@ const handleTransitionStart = () => {
 
 const handleTransitionEnd = () => {
   isTransitioning.value = false
+  // No reanudar lenis aquí, esperar a que termine el cooldown
+}
+
+const handleCooldownStart = () => {
+  isInCooldown.value = true
+  lenis?.stop()
+}
+
+const handleCooldownEnd = () => {
+  isInCooldown.value = false
   lenis?.start()
+  // Procesar cualquier cambio de escena pendiente
+  processPendingSceneChange()
 }
 </script>
 
@@ -250,13 +287,20 @@ const handleTransitionEnd = () => {
   <main class="home" ref="experienceRef">
     <LoadingOverlay :is-loading="isLoading" :progress="loadingProgress" />
     
+    <!-- Background video layer - fixed, behind everything -->
+    <BackgroundVideo />
+    
+    <!-- Scene stage with video and overlay in separate layers -->
     <div class="scene-stage">
       <SceneVideo
         :active-scene-index="activeSceneIndex"
         :scroll-progress="scrollProgress"
         :scenes="VIDEO_SCENES"
+        :hide-video="true"
         @transition-start="handleTransitionStart"
         @transition-end="handleTransitionEnd"
+        @cooldown-start="handleCooldownStart"
+        @cooldown-end="handleCooldownEnd"
       />
     </div>
 
@@ -274,9 +318,10 @@ const handleTransitionEnd = () => {
 <style scoped>
 .home {
   min-height: 320vh;
-  background: radial-gradient(circle at top, #d6ffe4 0%, #ebfff1 30%, #f7fff8 65%, #ffffff 100%);
+  background: transparent;
   color: #0d1f16;
   position: relative;
+  z-index: 1;
 }
 
 .scene-stage {
@@ -294,7 +339,7 @@ const handleTransitionEnd = () => {
   justify-content: center;
   padding: clamp(2rem, 4vw, 5rem);
   position: relative;
-  z-index: 0;
+  z-index: 1;
   pointer-events: none;
 }
 
