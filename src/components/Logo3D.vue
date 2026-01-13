@@ -292,9 +292,9 @@ const setupMouseControls = () => {
     const deltaY = event.clientY - previousMousePosition.y
 
     // Convertir movimiento del mouse a rotación
-    // Invertir deltaY para que el movimiento hacia arriba rote hacia arriba
+    // Invertir el comportamiento del eje Y
     rotationY += deltaX * 0.01
-    rotationX -= deltaY * 0.01
+    rotationX += deltaY * 0.01 // Invertido: ahora deltaY positivo rota hacia arriba
 
     // Limitar rotación a ±90 grados
     rotationX = Math.max(-MAX_ROTATION, Math.min(MAX_ROTATION, rotationX))

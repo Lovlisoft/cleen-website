@@ -5,6 +5,7 @@ import CleenLogo from '../assets/cleen.svg'
 import AudioControl from '../assets/audio-control.svg'
 import MenuIcon from '../assets/menu-icon.svg'
 import Logo3D from './Logo3D.vue'
+import FloatingPills from './FloatingPills.vue'
 
 const props = defineProps({
   scenes: {
@@ -738,6 +739,9 @@ onBeforeUnmount(() => {
         <!-- Scene 1 content - original content -->
         <template v-else-if="props.activeSceneIndex === 0">
           <div ref="scene1ContentRef">
+            <!-- Floating pills behind logo -->
+            <FloatingPills :active="props.activeSceneIndex === 0" />
+            
             <div class="scroll-prompt">
               <div class="scroll-prompt__box">
                 <p class="scroll-prompt__text">Scroll down to <br>find your happiness.</p>
