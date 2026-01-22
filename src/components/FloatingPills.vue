@@ -1,9 +1,14 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import gsap from 'gsap'
+import { ParticleExplosion } from '../composables/useParticleExplosion.js'
 
 const props = defineProps({
   active: {
+    type: Boolean,
+    default: true
+  },
+  isLoading: {
     type: Boolean,
     default: true
   }
@@ -22,7 +27,7 @@ const availableImages = [
 ]
 
 // Configuración de profundidad
-const DEPTH_LEVELS = 12 // Total de imágenes
+const DEPTH_LEVELS = 9 // Total de imágenes
 const MIN_SIZE = 40 // Tamaño mínimo en px (más cerca del centro)
 const MAX_SIZE = 200 // Tamaño máximo en px (más lejos del centro)
 const MIN_BLUR = 0 // Blur mínimo (sin blur - para tamaño máximo)
@@ -30,8 +35,8 @@ const MAX_BLUR = 8 // Blur máximo (muy borroso - para tamaño mínimo)
 
 // Área central mínima a evitar (solo el centro exacto donde está el logo)
 const CENTER_EXCLUSION_RADIUS = 0.08 // 8% del viewport desde el centro (muy pequeño)
-const QUADRANT_ELEMENTS = DEPTH_LEVELS / 4 // 3 elementos por cuadrante
-const MIN_DISTANCE = 0.12 // Distancia mínima entre elementos (12% del viewport)
+const QUADRANT_ELEMENTS = Math.ceil(DEPTH_LEVELS / 4) // Elementos por cuadrante (redondeado hacia arriba)
+const MIN_DISTANCE = 0.15 // Distancia mínima entre elementos (15% del viewport - aumentado para más separación)
 
 // Función para verificar si una posición está demasiado cerca de otras
 const isTooClose = (x, y, existingPositions, minDistance) => {
@@ -50,8 +55,7 @@ const isTooClose = (x, y, existingPositions, minDistance) => {
 const getUniformPosition = (index, total, existingPositions) => {
   const centerX = 50
   const centerY = 50
-  const margin = 0.03 // Margen del borde (3%)
-  const maxRadius = 0.47 // Radio máximo (hasta casi el borde)
+  const maxRadius = 0.60 // Radio máximo (reducido para menos separación)
   
   // Determinar cuadrante (0-3): top-right, top-left, bottom-left, bottom-right
   const quadrant = Math.floor(index / QUADRANT_ELEMENTS)
@@ -104,9 +108,10 @@ const getUniformPosition = (index, total, existingPositions) => {
     }
   } while (distance < CENTER_EXCLUSION_RADIUS || isTooClose(x, y, existingPositions, MIN_DISTANCE))
   
+  // Permitir que las posiciones se salgan del borde (sin clamp)
   return { 
-    x: Math.max(margin * 100, Math.min(100 - margin * 100, x)), 
-    y: Math.max(margin * 100, Math.min(100 - margin * 100, y)),
+    x: x, 
+    y: y,
     distance: distance
   }
 }
@@ -114,7 +119,7 @@ const getUniformPosition = (index, total, existingPositions) => {
 // Función para generar tamaño basado en distancia al centro (más cerca = más pequeño)
 const getSizeFromDistance = (distance, index) => {
   // Normalizar distancia: CENTER_EXCLUSION_RADIUS = 0, maxRadius = 1
-  const maxRadius = 0.47
+  const maxRadius = 0.60
   const normalizedDistance = (distance - CENTER_EXCLUSION_RADIUS) / (maxRadius - CENTER_EXCLUSION_RADIUS)
   
   // Mapear distancia a tamaño: distancia pequeña (0) = tamaño pequeño, distancia grande (1) = tamaño grande
@@ -181,7 +186,7 @@ const generatePills = () => {
       y: position.y,
       size: size,
       blur: blur,
-      opacity: 0.7 + Math.random() * 0.3, // Opacidad entre 0.7 y 1.0
+      opacity: 1, // Opacidad siempre al 100%
       scaleX: scaleX,
       scaleY: scaleY,
       rotation: initialRotation
@@ -191,17 +196,33 @@ const generatePills = () => {
   pills.value = generatedPills
 }
 
-// Animar entrada de las pills
+// Animar entrada de las pills con efecto explosión desde el centro
 const animatePills = () => {
   if (!containerRef.value) return
   
   const pillElements = containerRef.value.querySelectorAll('.floating-pill')
+  const centerX = 50 // Centro horizontal (porcentaje)
+  const centerY = 50 // Centro vertical (porcentaje)
   
-  pillElements.forEach((pill, index) => {
-    const pillData = pills.value[index]
+  // Ordenar pills por tamaño (menor a mayor) para animación
+  // Las más pequeñas aparecen primero
+  const sortedPills = pills.value
+    .map((pill, index) => ({ pill, index, element: pillElements[index] }))
+    .filter(item => item.element)
+    .sort((a, b) => a.pill.size - b.pill.size)
+  
+  sortedPills.forEach((item, sortedIndex) => {
+    const pill = item.element
+    const pillData = item.pill
     
-    // Configurar propiedades iniciales incluyendo espejado
+    // Posición final del pill (en porcentajes)
+    const finalX = pillData.x
+    const finalY = pillData.y
+    
+    // Configurar propiedades iniciales: todas en el centro, invisibles y pequeñas
     gsap.set(pill, {
+      left: `${centerX}%`,
+      top: `${centerY}%`,
       opacity: 0,
       scale: 0,
       scaleX: pillData.scaleX,
@@ -209,25 +230,45 @@ const animatePills = () => {
       rotation: pillData.rotation
     })
     
-    // Animar entrada con delay escalonado
-    gsap.to(pill, {
-      opacity: pillData.opacity,
-      scale: 1,
-      duration: 1,
-      delay: index * 0.1,
-      ease: 'back.out(1.7)'
+    // Animación de explosión súbita: todas llegan al mismo tiempo
+    const explosionDuration = 0.4 // Más rápida y explosiva
+    const bounceDuration = 0.3
+    
+    // Timeline para explosión + rebote (sin delay - todas al mismo tiempo)
+    const tl = gsap.timeline()
+    
+    // Fase 1: Explosión súbita desde el centro hacia la posición final
+    tl.to(pill, {
+      left: `${finalX}%`,
+      top: `${finalY}%`,
+      opacity: 1,
+      scale: 1.2, // Más grande para efecto más explosivo
+      duration: explosionDuration,
+      ease: 'power3.out' // Más agresivo que power2
+    })
+    // Fase 2: Rebote (escala más pequeña)
+    .to(pill, {
+      scale: 0.85, // Rebotar más dramático
+      duration: bounceDuration * 0.4,
+      ease: 'power2.in'
+    })
+    // Fase 3: Volver al tamaño final con rebote
+    .to(pill, {
+      scale: 1, // Volver al tamaño final
+      duration: bounceDuration * 0.6,
+      ease: 'back.out(3)' // Rebote más fuerte
     })
     
-    // Animación de flotación continua (solo si está activo)
+    // Animación de flotación continua (solo si está activo, después de la explosión)
     if (props.active) {
       const floatDuration = 3 + Math.random() * 2 // Entre 3 y 5 segundos
       const floatDistance = 20 + Math.random() * 20 // Entre 20 y 40px
       
-      // Rotación continua en dirección aleatoria (algunos en un sentido, otros en otro)
+      // Rotación continua en dirección aleatoria
       const rotationDirection = Math.random() > 0.5 ? 1 : -1
       const rotationAmount = (10 + Math.random() * 20) * rotationDirection
       
-      // Animar posición y rotación continua
+      // Iniciar flotación después de la explosión
       gsap.to(pill, {
         y: `+=${floatDistance}`,
         x: `+=${floatDistance * (Math.random() > 0.5 ? 1 : -1)}`,
@@ -235,21 +276,210 @@ const animatePills = () => {
         duration: floatDuration,
         ease: 'sine.inOut',
         yoyo: true,
-        repeat: -1
+        repeat: -1,
+        delay: explosionDuration + bounceDuration // Esperar a que termine la explosión
       })
     }
   })
 }
 
+// Watch para ejecutar animación cuando termine el loading
+watch(
+  () => props.isLoading,
+  (loading) => {
+    if (!loading && props.active) {
+      // Esperar un pequeño delay después del loading para sincronizar con el logo
+      setTimeout(() => {
+        animatePills()
+      }, 200)
+    }
+  },
+  { immediate: true }
+)
+
+// Exponer métodos para animación de salida
+const animateExit = (duration = 2) => {
+  console.log('💊 FloatingPills.animateExit called', { duration, container: !!containerRef.value })
+  
+  if (!containerRef.value) {
+    console.error('❌ FloatingPills: container not available')
+    return Promise.resolve()
+  }
+  
+  const pillElements = containerRef.value.querySelectorAll('.floating-pill:not(.floating-pill--center)')
+  console.log('💊 FloatingPills: found', pillElements.length, 'pills')
+  const promises = []
+  
+  pillElements.forEach((pill) => {
+    const pillData = pills.value[Array.from(pillElements).indexOf(pill)]
+    if (!pillData) return
+    
+    // Calcular dirección desde el centro hacia la posición actual
+    const centerX = 50
+    const centerY = 50
+    const dx = pillData.x - centerX
+    const dy = pillData.y - centerY
+    const distance = Math.sqrt(dx * dx + dy * dy)
+    
+    // Normalizar dirección
+    const dirX = dx / distance
+    const dirY = dy / distance
+    
+    // Continuar el movimiento en la misma línea, aumentando la distancia
+    const exitDistance = distance * 3 // Multiplicar por 3 para que se alejen mucho
+    const finalX = pillData.x + dirX * exitDistance
+    const finalY = pillData.y + dirY * exitDistance
+    
+    promises.push(
+      new Promise((resolve) => {
+        gsap.to(pill, {
+          left: `${finalX}%`,
+          top: `${finalY}%`,
+          scale: 0.3, // Reducir tamaño mientras se alejan
+          opacity: 0,
+          duration,
+          ease: 'power2.out',
+          onComplete: resolve
+        })
+      })
+    )
+  })
+  
+  console.log('💊 FloatingPills: starting', promises.length, 'pill animations')
+  return Promise.all(promises).then(() => {
+    console.log('✅ FloatingPills: all animations completed')
+  })
+}
+
+const createCenterPill = () => {
+  if (!containerRef.value) {
+    console.error('❌ createCenterPill: containerRef not available')
+    return null
+  }
+  
+  const centerPill = document.createElement('div')
+  centerPill.className = 'floating-pill floating-pill--center'
+  centerPill.style.cssText = `
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    width: 5px;
+    height: 5px;
+    opacity: 1;
+    transform: translate(-50%, -50%);
+    z-index: 10;
+    pointer-events: none;
+    border-radius: 50%;
+    overflow: hidden;
+  `
+  
+  const img = document.createElement('img')
+  img.src = availableImages[0]
+  img.className = 'floating-pill__image'
+  img.style.cssText = 'width: 100%; height: 100%; object-fit: cover; display: block; opacity: 1;'
+  
+  centerPill.appendChild(img)
+  containerRef.value.appendChild(centerPill)
+  
+  return centerPill
+}
+
+const animateCenterPill = (pillElement, duration = 2) => {
+  if (!pillElement) return Promise.resolve()
+  
+  // Calcular tamaño que REBASE COMPLETAMENTE el viewport - el DOBLE
+  const viewportWidth = window.innerWidth
+  const viewportHeight = window.innerHeight
+  const diagonal = Math.sqrt(viewportWidth * viewportWidth + viewportHeight * viewportHeight)
+  const finalSize = diagonal * 3 // 300% de la diagonal para dar sensación de zoom total y rebasar completamente
+  
+  return new Promise((resolve) => {
+    // Crecer con opacidad siempre en 100%
+    // Easing circ.in: Inicio muy lento (circular), luego aceleración exponencial dramática
+    gsap.to(pillElement, {
+      width: `${finalSize}px`,
+      height: `${finalSize}px`,
+      opacity: 1,
+      duration,
+      ease: 'circ.in', // Empieza muy lento, luego super aceleración al final
+      onComplete: resolve
+    })
+  })
+}
+
+/**
+ * Animación de explosión de pastillas usando el sistema estandarizado
+ */
+const animateExplosion = (duration = 2) => {
+  if (!containerRef.value) return Promise.resolve()
+  
+  // Configurar la explosión usando el sistema estandarizado
+  const explosion = new ParticleExplosion({
+    // Origen
+    originX: 50,
+    originY: 50,
+    
+    // Más partículas para efecto explosivo
+    particleCount: 15,
+    
+    // Tamaños - todas empiezan del mismo tamaño pequeño
+    initialSize: 8,
+    finalSizeMin: 60,  // Algunas quedan pequeñas (solo se alejan)
+    finalSizeMax: 180, // Otras crecen mucho (se acercan a la cámara)
+    
+    // Opacidad
+    initialOpacity: 0.4,
+    finalOpacity: 1,
+    
+    // Distancia - mayor variación
+    distanceMin: 40,
+    distanceMax: 120,
+    
+    // Velocidad - mucha más variación
+    durationMin: duration * 0.6,
+    durationMax: duration * 1.4,
+    accelerationFactor: 1,
+    
+    // Blur incremental
+    blurEnabled: true,
+    blurMin: 0,
+    blurMax: 20,
+    blurCurve: 'linear',
+    
+    // Easing con más impacto
+    ease: 'power2.out',
+    
+    // Contenedor
+    container: containerRef.value,
+    
+    // Z-index
+    zIndex: 2,
+    
+    // Imágenes
+    particleImages: availableImages
+  })
+  
+  return explosion.explode()
+}
+
+defineExpose({
+  animateExit,
+  createCenterPill,
+  animateCenterPill,
+  animateExplosion,
+  pills: () => pills.value,
+  containerRef // Exponer containerRef para poder acceder a la pastilla central
+})
+
 onMounted(() => {
   generatePills()
   
-  // Esperar a que se rendericen las imágenes
-  setTimeout(() => {
-    if (props.active) {
+  // Si el loading ya terminó, animar inmediatamente
+  if (!props.isLoading && props.active) {
+    setTimeout(() => {
       animatePills()
-    }
-  }, 100)
+    }, 200)
+  }
 })
 </script>
 
@@ -266,7 +496,7 @@ onMounted(() => {
         height: `${pill.size}px`,
         filter: `blur(${pill.blur}px)`,
         transform: `translate(-50%, -50%)`,
-        opacity: pill.opacity
+        opacity: 1
       }"
     >
       <img
@@ -301,5 +531,6 @@ onMounted(() => {
   height: 100%;
   object-fit: contain;
   display: block;
+  opacity: 1;
 }
 </style>

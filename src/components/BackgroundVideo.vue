@@ -102,7 +102,8 @@ onBeforeUnmount(() => {
   object-fit: cover;
   display: block;
   pointer-events: none;
-  opacity: 0.3;
+  opacity: 0.24; /* Reducido 20% desde 0.3 (0.3 * 0.8 = 0.24) */
+  filter: saturate(0.6); /* Reducido 40% de saturación (1 * 0.6 = 0.6) */
 }
 </style>
 

@@ -8,6 +8,10 @@ const props = defineProps({
   active: {
     type: Boolean,
     default: true
+  },
+  isLoading: {
+    type: Boolean,
+    default: true
   }
 })
 
@@ -95,6 +99,9 @@ const loadModel = () => {
       // Reducir 30% (multiplicar por 0.7)
       baseScale *= 0.7
       
+      // Aumentar 30% adicional (multiplicar por 1.3)
+      baseScale *= 1.3
+      
       // Calcular el tamaño máximo basado en el ancho de la pantalla
       const container = containerRef.value
       if (container && camera) {
@@ -131,11 +138,13 @@ const loadModel = () => {
       object.traverse((child) => {
         if (child.isMesh) {
           child.material = new THREE.MeshStandardMaterial({
-            color: 0x00c853, // Verde vibrante principal #00c853
+            color: 0x07E400, // Verde principal #07E400
             metalness: 0.1, // Mantener bajo para color puro
             roughness: 0.65, // Aumentado para material más mate, pero aún permite reflejos sutiles
-            emissive: 0x00c853, // Agregar emisión del mismo color para más brillo
-            emissiveIntensity: 0.1 // Intensidad de emisión reducida 50%
+            emissive: 0x07E400, // Agregar emisión del mismo color para más brillo
+            emissiveIntensity: 0.1, // Intensidad de emisión reducida 50%
+            transparent: true, // Habilitar transparencia para fade out
+            opacity: 1 // Opacidad inicial completa
           })
         }
       })
@@ -146,9 +155,14 @@ const loadModel = () => {
       // Inicializar con escala pequeña para animación de entrada
       logoMesh.scale.setScalar(0)
       
-      setupEntranceAnimation()
+      // NO ejecutar animación de entrada aquí - esperar a que termine el loading
       setupFloatAnimation()
       setupMouseControls()
+      
+      // Si el loading ya terminó, ejecutar la animación de entrada
+      if (!props.isLoading) {
+        setupEntranceAnimation()
+      }
     },
     undefined,
     (error) => {
@@ -167,13 +181,36 @@ const setupEntranceAnimation = () => {
     return
   }
 
-  // Animación de entrada: de pequeño a grande (sin rotación)
-  gsap.to(logoMesh.scale, {
+  // Animación de entrada: empezar desde el centro pequeño y crecer hasta el tamaño final
+  // El logo ya está en scale 0, así que empezamos desde ahí
+  logoMesh.scale.setScalar(0)
+  
+  // Timeline para animación con rebote: crecer desde pequeño hasta tamaño final
+  const tl = gsap.timeline()
+  
+  // Fase 1: Crecer desde pequeño hasta ligeramente más grande
+  tl.to(logoMesh.scale, {
+    x: targetScale * 1.15, // Crecer ligeramente más grande primero
+    y: targetScale * 1.15,
+    z: targetScale * 1.15,
+    duration: 0.4, // Duración rápida similar a las pills
+    ease: 'power3.out' // Más agresivo
+  })
+  // Fase 2: Rebote - reducir un poco
+  .to(logoMesh.scale, {
+    x: targetScale * 0.85,
+    y: targetScale * 0.85,
+    z: targetScale * 0.85,
+    duration: 0.3 * 0.4,
+    ease: 'power2.in'
+  })
+  // Fase 3: Volver al tamaño final con rebote
+  .to(logoMesh.scale, {
     x: targetScale,
     y: targetScale,
     z: targetScale,
-    duration: 0.8,
-    ease: 'back.out(1.7)',
+    duration: 0.3 * 0.6,
+    ease: 'back.out(3)', // Rebote más fuerte
     onComplete: () => {
       // Asegurar que el scale final sea el correcto
       logoMesh.scale.setScalar(targetScale)
@@ -433,6 +470,7 @@ const handleResize = () => {
     baseScale *= 1.7 // Aumentar 70%
     baseScale *= 1.4 // Aumentar adicional 40%
     baseScale *= 0.7 // Reducir 30%
+    baseScale *= 1.3 // Aumentar 30% adicional
     
         // Limitar basado en el nuevo ancho de pantalla
         const fov = camera.fov * (Math.PI / 180)
@@ -474,6 +512,18 @@ watch(
   { immediate: true }
 )
 
+// Watch para ejecutar animación de entrada cuando termine el loading
+watch(
+  () => props.isLoading,
+  (loading) => {
+    // Cuando el loading termine (pase de true a false) y el logo ya esté cargado
+    if (!loading && logoMesh && logoMesh.scale.x === 0) {
+      setupEntranceAnimation()
+    }
+  },
+  { immediate: true }
+)
+
 onMounted(() => {
   initThree()
   if (props.active) {
@@ -481,6 +531,196 @@ onMounted(() => {
     floatTimeline?.play()
     rotationTimeline?.play()
   }
+})
+
+// Exponer métodos para animación de salida
+const animateExit = (targetScale, duration = 2) => {
+  if (!logoMesh) {
+    console.error('Logo3D: logoMesh not available for exit animation')
+    return Promise.reject(new Error('logoMesh not available'))
+  }
+  
+  // Matar timelines
+  if (floatTimeline) {
+    floatTimeline.kill()
+    floatTimeline = null
+  }
+  if (rotationTimeline) {
+    rotationTimeline.kill()
+    rotationTimeline = null
+  }
+  
+  // Matar TODOS los tweens en logoMesh (incluyendo scale, position, rotation)
+  gsap.killTweensOf(logoMesh)
+  gsap.killTweensOf(logoMesh.scale)
+  gsap.killTweensOf(logoMesh.position)
+  gsap.killTweensOf(logoMesh.rotation)
+  
+  // Si hay floatGroup, matar sus tweens también
+  if (floatGroup) {
+    gsap.killTweensOf(floatGroup)
+    gsap.killTweensOf(floatGroup.position)
+  }
+  
+  // Centrar el logo para la animación
+  logoMesh.rotation.set(0, 0, 0)
+  logoMesh.position.set(0, 0, 0)
+  
+  if (floatGroup) {
+    floatGroup.rotation.set(0, 0, 0)
+    floatGroup.position.set(0, 0, 0)
+  }
+  
+  // Animar el floatGroup (contenedor del logoMesh) para que el scale sea visible
+  const targetToAnimate = floatGroup || logoMesh
+  const initialCameraZ = camera.position.z
+  
+  // ATRAVESAR el eje del logo: cámara cruza COMPLETAMENTE hacia valores negativos de Z
+  // La cámara va de z=4 a z=-6, pasando por detrás del logo
+  const targetCameraZ = -6 // Atraviesa completamente el umbral del eje Z del logo
+  
+  // El logo se mueve mucho más hacia adelante para amplificar el efecto de atravesar
+  const targetLogoZ = 6 // El logo avanza significativamente mientras la cámara lo atraviesa
+  
+  // Reducir duración a la mitad para zoom más rápido
+  const zoomDuration = duration * 0.5
+  
+  return new Promise((resolve) => {
+    const tl = gsap.timeline({
+      onComplete: resolve
+    })
+    
+    // Animar SCALE, CÁMARA y POSICIÓN simultáneamente
+    // El scale crece enormemente
+    tl.to(targetToAnimate.scale, {
+      x: targetScale,
+      y: targetScale,
+      z: targetScale,
+      duration: zoomDuration,
+      ease: 'power2.in'
+    }, 0)
+    
+    // La cámara atraviesa el eje Z del logo (va hacia valores negativos)
+    tl.to(camera.position, {
+      z: targetCameraZ,
+      duration: zoomDuration,
+      ease: 'power2.in'
+    }, 0)
+    
+    // El logo también se mueve hacia adelante (z positivo) amplificando el efecto
+    tl.to(targetToAnimate.position, {
+      z: targetLogoZ,
+      duration: zoomDuration,
+      ease: 'power2.in'
+    }, 0)
+    
+    // Fade out MUY TARDE para que las letras sean visibles mientras se atraviesan
+    // Empieza al 95% del zoom y dura solo 5% (fade muy rápido al final)
+    // Animar la opacidad del material de cada mesh hijo
+    logoMesh.traverse((child) => {
+      if (child.isMesh && child.material) {
+        tl.to(child.material, {
+          opacity: 0,
+          duration: zoomDuration * 0.05,
+          ease: 'power2.in'
+        }, zoomDuration * 0.95)
+      }
+    })
+  })
+}
+
+// Método para animación de entrada (reversa de exit)
+const animateEnter = (duration = 2) => {
+  if (!logoMesh) {
+    console.error('Logo3D: logoMesh not available for enter animation')
+    return Promise.reject(new Error('logoMesh not available'))
+  }
+  
+  // Matar animaciones previas
+  if (floatTimeline) {
+    floatTimeline.kill()
+    floatTimeline = null
+  }
+  if (rotationTimeline) {
+    rotationTimeline.kill()
+    rotationTimeline = null
+  }
+  
+  gsap.killTweensOf(logoMesh)
+  gsap.killTweensOf(logoMesh.scale)
+  gsap.killTweensOf(logoMesh.position)
+  gsap.killTweensOf(logoMesh.rotation)
+  gsap.killTweensOf(camera.position)
+  
+  if (floatGroup) {
+    gsap.killTweensOf(floatGroup)
+    gsap.killTweensOf(floatGroup.position)
+    gsap.killTweensOf(floatGroup.scale)
+  }
+  
+  const targetToAnimate = floatGroup || logoMesh
+  const targetScale = logoMesh.userData.targetScale || 1
+  const targetCameraZ = 4 // Posición original de la cámara
+  
+  return new Promise((resolve) => {
+    const tl = gsap.timeline({
+      onComplete: () => {
+        // Reactivar animaciones de float y rotación
+        setupFloatAnimation()
+        resolve()
+      }
+    })
+    
+    // Restaurar opacidad primero (fade in rápido al inicio)
+    logoMesh.traverse((child) => {
+      if (child.isMesh && child.material) {
+        tl.to(child.material, {
+          opacity: 1,
+          duration: duration * 0.15,
+          ease: 'power2.out'
+        }, 0)
+      }
+    })
+    
+    // Restaurar scale, posición de cámara y posición Z del logo simultáneamente
+    tl.to(targetToAnimate.scale, {
+      x: targetScale,
+      y: targetScale,
+      z: targetScale,
+      duration,
+      ease: 'power2.out'
+    }, 0)
+    
+    tl.to(camera.position, {
+      z: targetCameraZ,
+      duration,
+      ease: 'power2.out'
+    }, 0)
+    
+    // Restaurar posición Z del logo a su posición original (centro)
+    tl.to(targetToAnimate.position, {
+      z: 0,
+      duration,
+      ease: 'power2.out'
+    }, 0)
+  })
+}
+
+const getCurrentScale = () => {
+  const targetToCheck = floatGroup || logoMesh
+  return targetToCheck ? targetToCheck.scale.x : 0
+}
+
+const getTargetScale = () => {
+  return logoMesh?.userData.targetScale || 0
+}
+
+defineExpose({
+  animateExit,
+  animateEnter,
+  getCurrentScale,
+  getTargetScale,
+  logoMesh: () => logoMesh
 })
 
 onBeforeUnmount(() => {

@@ -14,24 +14,19 @@ gsap.registerPlugin(ScrollTrigger)
 
 const VIDEO_SCENES = [
   { id: 'scene-1', label: 'Intro', time: 2, window: 2 },
-  { id: 'scene-2', label: 'Transition A', time: 7, window: 2 },
-  { id: 'scene-3', label: 'Mid Motion', time: 14, window: 2 },
-  { id: 'scene-4', label: 'Smile Close', time: 19, window: 2 },
-  { id: 'scene-5', label: 'Glow', time: 23, window: 2 },
-  { id: 'scene-6', label: 'Finale', time: 32, window: 2 }
+  { id: 'scene-2', label: 'Scene 2', time: 7, window: 2 }
 ]
 
 const TOTAL_FRAMES = 846
-const sections = ref([])
+const SCROLL_THRESHOLD = 150 // Pixels de scroll necesarios para cambiar de escena
+
 const experienceRef = ref(null)
-const activeSceneIndex = ref(0)
-const scrollProgress = ref(0)
-const triggers = []
+const activeSceneIndex = ref(0) // Empezamos en escena 1 (índice 0)
 const isTransitioning = ref(false)
-const isInCooldown = ref(false)
 const isLoading = ref(true)
 const loadingProgress = ref(0)
-const pendingSceneChange = ref(null)
+const navigationDirection = ref('forward') // 'forward' o 'backward'
+
 const prefersReducedMotion =
   typeof window !== 'undefined'
     ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -39,35 +34,23 @@ const prefersReducedMotion =
 
 let lenis
 let rafId
+let lastScrollY = 0
+let scrollTriggerInstance = null
 
-const setSectionRef = (el) => {
-  if (el && !sections.value.includes(el)) {
-    sections.value.push(el)
-  }
-}
-
-const activateScene = (index) => {
-  // Si estamos en transición o cooldown, guardar el cambio pendiente
-  if (isTransitioning.value || isInCooldown.value) {
-    pendingSceneChange.value = index
+// Activar escena con dirección de navegación
+const activateScene = (index, direction = 'forward') => {
+  // Si ya estamos en esta escena, no hacer nada
+  if (index === activeSceneIndex.value) {
     return
   }
   
-  // Solo activar si es diferente a la escena actual
-  if (index !== activeSceneIndex.value) {
-    activeSceneIndex.value = index
+  // Si estamos en transición, ignorar
+  if (isTransitioning.value) {
+    return
   }
-}
-
-const processPendingSceneChange = () => {
-  if (pendingSceneChange.value !== null && !isTransitioning.value && !isInCooldown.value) {
-    const targetIndex = pendingSceneChange.value
-    pendingSceneChange.value = null
-    // Solo activar si es diferente a la escena actual
-    if (targetIndex !== activeSceneIndex.value) {
-      activeSceneIndex.value = targetIndex
-    }
-  }
+  
+  navigationDirection.value = direction
+  activeSceneIndex.value = index
 }
 
 // Convert scene time (seconds) to frame index
@@ -93,65 +76,61 @@ const loadImage = (src) => {
 const preloadCriticalFrames = async () => {
   const criticalFrames = []
   
-  // Load frames for each scene
+  // Precargar frames críticos de cada escena
   VIDEO_SCENES.forEach((scene) => {
-    const frameIndex = timeToFrameIndex(scene.time)
+    const frameIndex = timeToFrameIndex(scene.time ?? 0)
     criticalFrames.push(frameIndex)
-    // Also preload a few frames around each scene for smooth transitions
-    for (let i = -2; i <= 2; i++) {
-      const nearbyFrame = frameIndex + i
-      if (nearbyFrame >= 0 && nearbyFrame < TOTAL_FRAMES) {
-        criticalFrames.push(nearbyFrame)
+  })
+  
+  // Precargar frames adicionales alrededor de cada frame crítico
+  const framesToLoad = new Set()
+  criticalFrames.forEach((frame) => {
+    for (let i = -5; i <= 5; i++) {
+      const targetFrame = frame + i
+      if (targetFrame >= 0 && targetFrame < TOTAL_FRAMES) {
+        framesToLoad.add(targetFrame)
       }
     }
   })
   
-  // Remove duplicates
-  const uniqueFrames = [...new Set(criticalFrames)].sort((a, b) => a - b)
-  
-  const total = uniqueFrames.length
-  let loaded = 0
-  
-  const promises = uniqueFrames.map((frameIndex) => {
-    return loadImage(getFramePath(frameIndex))
-      .then(() => {
-        loaded++
-        loadingProgress.value = Math.min(loaded / total, 0.7) // Frames are 70% of total
-      })
-      .catch(() => {
-        loaded++
-        loadingProgress.value = Math.min(loaded / total, 0.7)
-      })
+  const promises = Array.from(framesToLoad).map((frameIndex) => {
+    const framePath = getFramePath(frameIndex)
+    return loadImage(framePath).catch(() => null)
   })
   
-  await Promise.all(promises)
+  const totalFrames = promises.length
+  let loadedFrames = 0
+  
+  const results = await Promise.allSettled(
+    promises.map((promise) =>
+      promise.then((result) => {
+        loadedFrames++
+        loadingProgress.value = Math.min(loadedFrames / totalFrames, 0.9)
+        return result
+      })
+    )
+  )
+  
+  return results
 }
 
 const preloadAssets = async () => {
-  const assets = [CleenLogo, AudioControl, MenuIcon]
+  const assets = [
+    '/models/logo.obj',
+    '/models/esfera.obj',
+    '/textures/texture.jpg'
+  ]
   
-  const total = assets.length
-  let loaded = 0
-  
-  const promises = assets.map((src) => {
-    return loadImage(src)
-      .then(() => {
-        loaded++
-        loadingProgress.value = 0.7 + (loaded / total) * 0.3 // Assets are 30% of total
-      })
-      .catch(() => {
-        loaded++
-        loadingProgress.value = 0.7 + (loaded / total) * 0.3
-      })
-  })
+  const promises = assets.map((asset) =>
+    fetch(asset)
+      .then((response) => response.blob())
+      .catch(() => null)
+  )
   
   await Promise.all(promises)
 }
 
 const preloadAll = async () => {
-  const startTime = Date.now()
-  const minLoadingTime = 2000 // Minimum 2 seconds
-  
   try {
     loadingProgress.value = 0
     
@@ -163,54 +142,51 @@ const preloadAll = async () => {
     
     loadingProgress.value = 1
     
-    // Calculate remaining time to meet minimum loading duration
-    const elapsedTime = Date.now() - startTime
-    const remainingTime = Math.max(0, minLoadingTime - elapsedTime)
-    
-    // Wait for remaining time + small delay to show 100% before hiding
-    await new Promise((resolve) => setTimeout(resolve, remainingTime + 300))
+    // Small delay to show 100% before hiding
+    await new Promise((resolve) => setTimeout(resolve, 300))
     
     isLoading.value = false
     document.body.style.overflow = ''
   } catch (error) {
     console.error('Error during preload:', error)
     // Still show the experience even if some assets fail
-    // Calculate remaining time to meet minimum loading duration
-    const elapsedTime = Date.now() - startTime
-    const remainingTime = Math.max(0, minLoadingTime - elapsedTime)
-    await new Promise((resolve) => setTimeout(resolve, remainingTime + 300))
+    await new Promise((resolve) => setTimeout(resolve, 300))
     isLoading.value = false
     document.body.style.overflow = ''
   }
 }
 
-const initScrollTriggers = () => {
-  // Section triggers for scene activation based on scroll
-  sections.value.forEach((section, index) => {
-    const trigger = ScrollTrigger.create({
-      trigger: section,
-      start: 'top center',
-      end: 'bottom center',
-      scrub: false,
-      onEnter: () => {
-        // Bloquear si estamos en transición o cooldown
-        if (isTransitioning.value || isInCooldown.value) {
-          pendingSceneChange.value = index
-          return
-        }
-        activateScene(index)
-      },
-      onEnterBack: () => {
-        // Bloquear si estamos en transición o cooldown
-        if (isTransitioning.value || isInCooldown.value) {
-          pendingSceneChange.value = index
-          return
-        }
-        activateScene(index)
+const initScrollTrigger = () => {
+  // Crear un trigger global que detecte la dirección y posición del scroll
+  scrollTriggerInstance = ScrollTrigger.create({
+    trigger: experienceRef.value,
+    start: 'top top',
+    end: 'bottom bottom',
+    onUpdate: (self) => {
+      // Si estamos en transición, bloquear detección
+      if (isTransitioning.value) {
+        return
       }
-    })
-
-    triggers.push(trigger)
+      
+      const currentScrollY = self.scroll()
+      const scrollDelta = currentScrollY - lastScrollY
+      
+      // Detectar dirección del scroll
+      const isScrollingDown = scrollDelta > 0
+      const isScrollingUp = scrollDelta < 0
+      
+      // ESCENA 1 → ESCENA 2 (scroll hacia abajo)
+      if (activeSceneIndex.value === 0 && isScrollingDown && currentScrollY > SCROLL_THRESHOLD) {
+        activateScene(1, 'forward')
+      }
+      
+      // ESCENA 2 → ESCENA 1 (scroll hacia arriba)
+      if (activeSceneIndex.value === 1 && isScrollingUp && currentScrollY < SCROLL_THRESHOLD) {
+        activateScene(0, 'backward')
+      }
+      
+      lastScrollY = currentScrollY
+    }
   })
 }
 
@@ -218,21 +194,15 @@ const initLenis = () => {
   if (prefersReducedMotion) return
 
   lenis = new Lenis({
-    lerp: 0.15,
+    lerp: 0.1,
     smoothWheel: true,
-    wheelMultiplier: 1,
-    touchMultiplier: 1,
+    wheelMultiplier: 1.5,
+    touchMultiplier: 1.5,
     infinite: false,
-    duration: 1.2
+    duration: 0.8
   })
 
-  lenis.on('scroll', (e) => {
-    // Bloquear scroll durante transición o cooldown
-    if (isTransitioning.value || isInCooldown.value) {
-      lenis.stop()
-      // Prevenir que ScrollTrigger procese eventos durante bloqueo
-      return false
-    }
+  lenis.on('scroll', () => {
     ScrollTrigger.update()
   })
 
@@ -246,12 +216,16 @@ const initLenis = () => {
 
 onMounted(async () => {
   await preloadAll()
-  initScrollTriggers()
+  initScrollTrigger()
   initLenis()
+  
+  console.log(`✅ HomeView mounted - Escena 1 active by default`)
 })
 
 onBeforeUnmount(() => {
-  triggers.forEach((trigger) => trigger.kill())
+  if (scrollTriggerInstance) {
+    scrollTriggerInstance.kill()
+  }
 
   if (rafId) {
     cancelAnimationFrame(rafId)
@@ -267,24 +241,13 @@ const handleTransitionStart = () => {
 
 const handleTransitionEnd = () => {
   isTransitioning.value = false
-  // No reanudar lenis aquí, esperar a que termine el cooldown
-}
-
-const handleCooldownStart = () => {
-  isInCooldown.value = true
-  lenis?.stop()
-}
-
-const handleCooldownEnd = () => {
-  isInCooldown.value = false
   lenis?.start()
-  // Procesar cualquier cambio de escena pendiente
-  processPendingSceneChange()
 }
 </script>
 
 <template>
   <main class="home" ref="experienceRef">
+    <!-- Loading overlay -->
     <LoadingOverlay :is-loading="isLoading" :progress="loadingProgress" />
     
     <!-- Background video layer - fixed, behind everything -->
@@ -294,30 +257,24 @@ const handleCooldownEnd = () => {
     <div class="scene-stage">
       <SceneVideo
         :active-scene-index="activeSceneIndex"
-        :scroll-progress="scrollProgress"
+        :navigation-direction="navigationDirection"
         :scenes="VIDEO_SCENES"
         :hide-video="true"
+        :is-loading="isLoading"
         @transition-start="handleTransitionStart"
         @transition-end="handleTransitionEnd"
-        @cooldown-start="handleCooldownStart"
-        @cooldown-end="handleCooldownEnd"
       />
     </div>
 
-    <section
-      v-for="scene in VIDEO_SCENES"
-      :key="scene.id"
-      class="scene-anchor scene-anchor--hidden"
-      :ref="setSectionRef"
-    >
-      <div class="copy-block" aria-hidden="true" />
-    </section>
+    <!-- Spacer sections for scroll detection -->
+    <div class="scroll-spacer scene-1-spacer"></div>
+    <div class="scroll-spacer scene-2-spacer"></div>
   </main>
 </template>
 
 <style scoped>
 .home {
-  min-height: 320vh;
+  min-height: 200vh;
   background: transparent;
   color: #0d1f16;
   position: relative;
@@ -330,62 +287,24 @@ const handleCooldownEnd = () => {
   height: 100vh;
   width: 100%;
   z-index: 10;
-}
-
-.scene-anchor {
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: clamp(2rem, 4vw, 5rem);
-  position: relative;
-  z-index: 1;
   pointer-events: none;
 }
 
-.scene-anchor--hidden .copy-block {
-  opacity: 0;
+.scene-stage > * {
+  pointer-events: auto;
+}
+
+.scroll-spacer {
+  height: 100vh;
+  width: 100%;
   pointer-events: none;
 }
 
-.copy-block {
-  max-width: 620px;
-  padding: clamp(1.5rem, 4vw, 2.5rem);
-  border-radius: 1.5rem;
-  border: 1px solid rgba(13, 31, 22, 0.08);
-  background: rgba(255, 255, 255, 0.75);
-  backdrop-filter: blur(14px);
-  text-align: left;
-  box-shadow: 0 45px 90px rgba(0, 25, 13, 0.08);
+.scene-1-spacer {
+  /* Primera sección - Escena 1 */
 }
 
-.copy-block h1 {
-  font-size: clamp(2rem, 5vw, 3.4rem);
-  margin-bottom: 0.5rem;
-}
-
-.copy-block h2 {
-  font-size: clamp(1.5rem, 4vw, 2.5rem);
-  margin-bottom: 0.5rem;
-}
-
-.copy-block p {
-  font-size: 1rem;
-  line-height: 1.6;
-  color: rgba(13, 31, 22, 0.85);
-}
-
-.eyebrow {
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
-  font-size: 0.85rem;
-  color: rgba(13, 31, 22, 0.65);
-  margin-bottom: 0.75rem;
-}
-
-code {
-  font-size: 0.9em;
-  color: #2aa44f;
+.scene-2-spacer {
+  /* Segunda sección - Escena 2 */
 }
 </style>
-
