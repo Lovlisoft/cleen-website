@@ -14,7 +14,8 @@ gsap.registerPlugin(ScrollTrigger)
 
 const VIDEO_SCENES = [
   { id: 'scene-1', label: 'Intro', time: 2, window: 2 },
-  { id: 'scene-2', label: 'Scene 2', time: 7, window: 2 }
+  { id: 'scene-2', label: 'Scene 2', time: 7, window: 2 },
+  { id: 'scene-3', label: 'Scene 3', time: 12, window: 2 }
 ]
 
 const TOTAL_FRAMES = 846
@@ -180,9 +181,19 @@ const initScrollTrigger = () => {
         activateScene(1, 'forward')
       }
       
+      // ESCENA 2 → ESCENA 3 (scroll hacia abajo)
+      if (activeSceneIndex.value === 1 && isScrollingDown && currentScrollY > SCROLL_THRESHOLD * 2) {
+        activateScene(2, 'forward')
+      }
+      
       // ESCENA 2 → ESCENA 1 (scroll hacia arriba)
       if (activeSceneIndex.value === 1 && isScrollingUp && currentScrollY < SCROLL_THRESHOLD) {
         activateScene(0, 'backward')
+      }
+      
+      // ESCENA 3 → ESCENA 2 (scroll hacia arriba)
+      if (activeSceneIndex.value === 2 && isScrollingUp && currentScrollY < SCROLL_THRESHOLD * 2) {
+        activateScene(1, 'backward')
       }
       
       lastScrollY = currentScrollY
@@ -269,6 +280,7 @@ const handleTransitionEnd = () => {
     <!-- Spacer sections for scroll detection -->
     <div class="scroll-spacer scene-1-spacer"></div>
     <div class="scroll-spacer scene-2-spacer"></div>
+    <div class="scroll-spacer scene-3-spacer"></div>
   </main>
 </template>
 
