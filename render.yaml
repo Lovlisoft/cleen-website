@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: cleen-website
+    env: static
+    buildCommand: npm run build
+    staticPublishPath: ./dist
+    pullRequestPreviewsEnabled: false
